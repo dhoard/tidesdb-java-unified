@@ -1,0 +1,22 @@
+TidesDB Java Unified — License Notice
+======================================
+
+This project, tidesdb-java-unified, combines:
+
+1. TidesDB (Mozilla Public License 2.0)
+   Copyright (c) the TidesDB contributors.
+   https://github.com/tidesdb/tidesdb
+
+2. tidesdb-java Java bindings (Mozilla Public License 2.0)
+   Copyright (c) the TidesDB contributors.
+   https://github.com/tidesdb/tidesdb-java
+
+3. Statically-linked compression libraries:
+   - zstd (BSD 3-Clause) — Meta Platforms, Inc.
+   - lz4 (BSD 2-Clause) — Yann Collet
+   - snappy (BSD 3-Clause) — Google Inc.
+
+The combined artifact is distributed under the Mozilla Public License 2.0.
+
+See MPL-2.0.txt for the full MPL-2.0 license text.
+See THIRD-PARTY.txt for third-party license details.
