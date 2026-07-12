@@ -58,7 +58,7 @@ public class TidesDBIterator implements Closeable {
     }
     
     /**
-     * Positions the iterator at the first key >= target key.
+     * Positions the iterator at the first key {@code >=} target key.
      *
      * @param key the target key
      * @throws TidesDBException if the seek fails
