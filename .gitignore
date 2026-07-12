@@ -6,7 +6,7 @@ build/
 dist/
 
 # ── Cloned upstream repos ──
-tidesdb/
+/tidesdb/
 
 # ── vcpkg (no longer required; retained for safety) ──
 .vcpkg/

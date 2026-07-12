@@ -299,12 +299,33 @@ vendor_java_sources() {
     local upstream_src="$WORK_DIR/tidesdb-java/src/main/java/com/tidesdb"
     local target_src="$PROJECT_DIR/src/main/java/com/tidesdb"
 
-    # Copy all Java files except NativeLibrary.java (we replace it)
-    for f in "$upstream_src"/*.java; do
-        local basename
+    if [ ! -d "$upstream_src" ]; then
+        echo "[VENDOR] FAIL: upstream Java source directory not found: $upstream_src"
+        exit 2
+    fi
+
+    local maintained_loader="$target_src/NativeLibrary.java"
+    if [ ! -f "$maintained_loader" ]; then
+        echo "[VENDOR] FAIL: maintained native loader not found: $maintained_loader"
+        exit 2
+    fi
+
+    local -a upstream_files
+    mapfile -t upstream_files < <(find "$upstream_src" -maxdepth 1 -type f -name '*.java' -print | sort)
+    if [ "${#upstream_files[@]}" -eq 0 ]; then
+        echo "[VENDOR] FAIL: no upstream Java sources found in: $upstream_src"
+        exit 2
+    fi
+
+    # Refresh the checked-in upstream API sources deterministically, retaining
+    # this project's customized native loader.
+    mkdir -p "$target_src"
+    find "$target_src" -maxdepth 1 -type f -name '*.java' ! -name 'NativeLibrary.java' -delete
+    local f basename
+    for f in "${upstream_files[@]}"; do
         basename=$(basename "$f")
         if [ "$basename" != "NativeLibrary.java" ]; then
-            cp "$f" "$target_src/"
+            cp "$f" "$target_src/$basename"
             echo "[VENDOR]   $basename"
         fi
     done
