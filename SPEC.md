@@ -833,6 +833,58 @@ This replaces the upstream `NativeLibrary`. It must:
 3. Extract to a hash-addressed cache directory with atomic writes.
 4. Support a development override via `tidesdb.native.library.path`.
 5. Be idempotent and thread-safe.
+6. Be process-safe and crash-safe when multiple JVMs share the extraction cache.
+
+#### Process-safe extraction specification
+
+For `${java.io.tmpdir}/tidesdb-java-unified/<version>/<sha256>/`, the loader
+shall create and permanently retain `.extract.lock`. It shall acquire an
+exclusive `FileChannel.lock()` before checking or changing the canonical native
+library. While holding that lock it shall SHA-256 validate any existing final
+file. A missing or invalid file shall be rebuilt through a uniquely named
+same-directory temporary file, whose contents are forced with
+`FileChannel.force(true)`, followed by `ATOMIC_MOVE` with `REPLACE_EXISTING`.
+The temporary file shall be removed in a `finally` block when possible. The
+lock shall be released before `System.load`.
+
+Consequently, a JVM crash before the move can expose only an unreferenced
+`.tmp-*` file, while a crash after the move exposes the complete final file.
+An abandoned temporary file is ignored. A partial or otherwise corrupt final
+file is detected by SHA-256 and repaired under the lock. Failure to lock,
+validate, write, force, set permissions, or publish shall be reported as an
+`UnsatisfiedLinkError` retaining the `IOException` cause.
+
+Tests shall use the latest stable JUnit Jupiter 5.x and AssertJ, remain compatible
+with Java 11 source/target, and cover corrupt-file repair, abandoned temporary
+files, and two independent JVM processes publishing to one empty cache directory.
+
+#### Maven version-management specification
+
+All direct dependency and Maven build-plugin versions shall be declared as
+properties in `pom.xml`. `org.codehaus.mojo:versions-maven-plugin` shall be
+configured with a pinned property and
+`file://${maven.multiModuleProjectDirectory}/versions-rules.xml`. The rules file
+shall use the Versions Plugin rule 2.0.0 schema and globally ignore unstable
+alpha, beta, milestone, RC, EA, and SNAPSHOT versions by regular expression.
+
+`./mvnw versions:display-property-updates` and
+`./mvnw versions:display-plugin-updates` are the authoritative update checks.
+Stable compatible updates shall be pinned rather than dynamically resolved.
+JUnit shall remain on major version 5 because the project supports Java 11.
+Acceptance requires `./build.sh`, whose Java phase executes `./mvnw clean
+install`; the resulting artifact must therefore exist in the user's standard
+local Maven repository as well as `dist/`.
+
+#### Maven Wrapper specification
+
+The repository shall use the standard Apache Maven Wrapper binary distribution
+layout used by AltContainers. `.mvn/wrapper/maven-wrapper.properties` shall pin
+`wrapperVersion=3.3.4`, `distributionType=bin`, and a stable Maven 3.9.x binary
+distribution. The matching generated `mvnw`, `mvnw.cmd`, and checked-in
+`maven-wrapper.jar` shall be present; `mvnw` shall be executable. No build script
+may invoke a system `mvn`. `./mvnw --version` must report the pinned Maven
+version, and final acceptance remains a successful `./build.sh` including local
+repository installation and packaged-JAR execution.
 
 ```java
 package com.tidesdb;

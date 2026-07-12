@@ -382,6 +382,30 @@ Run that platform's final JAR on the same target platform in a clean machine/con
 - paths containing spaces and non-ASCII characters;
 - two separate JVMs starting simultaneously against the extraction cache.
 
+### 9.1 Crash-safe, process-safe native cache publication
+
+The hash-addressed cache is shared by JVMs, so extraction must coordinate at the
+operating-system process level rather than relying only on the loader's
+`ReentrantLock`:
+
+1. Create the version/hash cache directory before inspecting the destination.
+2. Open a persistent `.extract.lock` file in that directory and acquire an
+   exclusive `FileChannel` lock. Never delete the lock file, because replacing
+   it could let processes lock different filesystem objects.
+3. After acquiring the lock, revalidate the final library with SHA-256. This
+   second check closes the check-then-act race.
+4. If missing or corrupt, write the embedded bytes to a unique temporary file in
+   the same directory, set permissions, force its file contents to stable
+   storage, and atomically replace the final path.
+5. Always remove the temporary file when possible and release the process lock.
+   A crash before publication may leave only an ignored `.tmp-*` file; a crash
+   after atomic publication leaves the complete library.
+6. Load only the validated final path after releasing the extraction lock.
+
+Retain one content-addressed library per artifact hash rather than generating a
+copy per JVM. Validate recovery from a corrupt/partial final file, tolerance of
+an abandoned temporary file, and simultaneous publication by separate JVMs.
+
 ### Stage E — MVP artifact retention
 
 - retain the tested Linux x86-64 JAR, checksum, SBOM, dependency report, and provenance as CI artifacts;
@@ -408,6 +432,39 @@ Allowed dependency lists must be explicit per platform. Specifically reject refe
 6. **Release audit:** licenses, SBOM, dependency reports, binary checksums, and clean-machine execution.
 
 Native tests must run on the target architecture; cross-compilation alone is not sufficient acceptance evidence.
+
+## 11.1 Maven version auditing
+
+Maintain every direct dependency and build-plugin version as a named property in
+`pom.xml`, grouped into dependency and plugin versions. Configure the MojoHaus
+Versions Maven Plugin with a repository-root `versions-rules.xml`, following the
+AltContainers pattern. The rules shall reject alpha, beta, milestone, release
+candidate, early-access, and snapshot releases so routine audits recommend only
+stable versions.
+
+Developers shall run the checked-in wrapper, never a system Maven executable:
+
+```bash
+./mvnw versions:display-property-updates
+./mvnw versions:display-plugin-updates
+```
+
+Apply stable updates deliberately, preserving Java 11 runtime/source
+compatibility (including JUnit Jupiter 5 rather than JUnit 6), then run
+`./build.sh`. Because `build.sh` invokes `./mvnw clean install`, successful
+verification must also install the artifact into the normal local Maven
+repository.
+
+### 11.2 Standard Maven Wrapper
+
+Use the same checked-in binary-wrapper model as AltContainers: standard Maven
+Wrapper launchers, `.mvn/wrapper/maven-wrapper.jar`, `distributionType=bin`, and
+a pinned stable Maven distribution URL. Generate these files with the wrapper
+plugin rather than maintaining custom download/extraction logic. Keep both Unix
+and Windows launchers, preserve executable permission on `mvnw`, and continue to
+route every project, example, version-audit, and release Maven invocation through
+`./mvnw` (or `mvnw.cmd` on Windows). Verify the wrapper-reported Maven version
+and the complete `./build.sh` workflow.
 
 ## 12. Licensing and security
 

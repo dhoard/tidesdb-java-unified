@@ -15,6 +15,7 @@ vcpkg_installed/
 # ── Compiled binaries ──
 *.class
 *.jar
+!.mvn/wrapper/maven-wrapper.jar
 *.so
 *.dylib
 *.dll

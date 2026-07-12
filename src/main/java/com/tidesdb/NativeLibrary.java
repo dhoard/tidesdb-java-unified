@@ -2,10 +2,14 @@ package com.tidesdb;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -119,25 +123,7 @@ public final class NativeLibrary {
         Path libPath = cacheDir.resolve(libName);
 
         try {
-            if (Files.notExists(libPath) || !sha256Hex.equals(sha256File(libPath))) {
-                Files.createDirectories(cacheDir);
-                Path tmpPath =
-                        Files.createTempFile(cacheDir, ".tmp-", "." + libName);
-                try {
-                    Files.write(tmpPath, libBytes);
-                    setExecutablePermissions(tmpPath);
-                    Files.move(
-                            tmpPath,
-                            libPath,
-                            StandardCopyOption.ATOMIC_MOVE,
-                            StandardCopyOption.REPLACE_EXISTING);
-                } finally {
-                    try {
-                        Files.deleteIfExists(tmpPath);
-                    } catch (IOException ignored) {
-                    }
-                }
-            }
+            extract(cacheDir, libName, libBytes, sha256Hex);
         } catch (IOException e) {
             UnsatisfiedLinkError err = new UnsatisfiedLinkError(
                     "Failed to extract native library to: " + libPath);
@@ -201,6 +187,47 @@ public final class NativeLibrary {
     private static String version() {
         String v = NativeLibrary.class.getPackage().getImplementationVersion();
         return v != null ? v : "dev";
+    }
+
+    /** Publishes validated bytes into a cache shared by independent JVMs. */
+    static Path extract(Path cacheDir, String libName, byte[] libBytes, String sha256Hex)
+            throws IOException {
+        Files.createDirectories(cacheDir);
+        Path libPath = cacheDir.resolve(libName);
+        Path lockPath = cacheDir.resolve(".extract.lock");
+
+        // Keep the lock file permanently: deleting it could let waiters lock different inodes.
+        try (FileChannel lockChannel = FileChannel.open(
+                        lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+                FileLock ignored = lockChannel.lock()) {
+            // Recheck only after acquiring the process lock to close the check-then-act race.
+            if (Files.notExists(libPath) || !sha256Hex.equals(sha256File(libPath))) {
+                Path tmpPath = Files.createTempFile(cacheDir, ".tmp-", "." + libName);
+                try {
+                    try (FileChannel output = FileChannel.open(
+                            tmpPath, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+                        ByteBuffer bytes = ByteBuffer.wrap(libBytes);
+                        while (bytes.hasRemaining()) {
+                            output.write(bytes);
+                        }
+                        output.force(true);
+                    }
+                    setExecutablePermissions(tmpPath);
+                    Files.move(
+                            tmpPath,
+                            libPath,
+                            StandardCopyOption.ATOMIC_MOVE,
+                            StandardCopyOption.REPLACE_EXISTING);
+                } finally {
+                    try {
+                        Files.deleteIfExists(tmpPath);
+                    } catch (IOException ignoredDeleteFailure) {
+                        // A stale uniquely named temporary file is harmless and ignored.
+                    }
+                }
+            }
+        }
+        return libPath;
     }
 
     private static String sha256Hex(byte[] data) {
