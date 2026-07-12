@@ -1,4 +1,4 @@
-name: CI
+name: build
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  build-linux-x86_64:
+  build:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -16,20 +16,14 @@ jobs:
         uses: actions/setup-java@v4
         with:
           java-version: '11'
-          distribution: 'temurin'
+          distribution: 'corretto'
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build gcc g++ binutils curl tar
+          sudo apt-get install -y cmake ninja-build gcc g++ binutils curl tar python3
 
-      - name: Set up vcpkg
-        run: |
-          git clone https://github.com/microsoft/vcpkg.git "$HOME/vcpkg"
-          "$HOME/vcpkg/bootstrap-vcpkg.sh"
-          echo "VCPKG_ROOT=$HOME/vcpkg" >> "$GITHUB_ENV"
-
-      - name: Build (invoke ./build.sh)
+      - name: Build
         run: bash ./build.sh
 
       - name: Upload dist artifacts
