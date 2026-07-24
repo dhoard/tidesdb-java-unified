@@ -4,18 +4,37 @@ A self-contained Java binding for [TidesDB](https://github.com/tidesdb/tidesdb).
 
 > **Current platform:** Linux x86-64 with glibc. Other operating systems and architectures are not yet supported.
 
-## Versions
+## Upstream configuration
 
-| Component | Version |
+All upstream sources are configured in [`upstream.properties`](upstream.properties) using a branch + tag model:
+
+```properties
+tidesdb.branch=master
+tidesdb.tag=           # empty = latest on branch
+tidesdb.repo=https://github.com/tidesdb/tidesdb.git
+```
+
+| Field | Purpose |
 |---|---|
-| tidesdb-java | 0.8.3 |
-| TidesDB | 9.3.13 |
-| Java | 11 or later |
-| zstd | 1.5.6 |
-| LZ4 | 1.10.0 |
-| Snappy | 1.2.1 |
+| `.branch` | Branch to clone |
+| `.tag` | Tag to checkout (empty = latest on branch) |
+| `.repo` | Repository URL |
 
-All upstream sources are checked out at immutable commits recorded in [`upstream.properties`](upstream.properties).
+To pin a specific release, set the tag:
+
+```properties
+tidesdb.branch=master
+tidesdb.tag=v9.3.13
+```
+
+| Component | Branch | Default Tag |
+|---|---|---|
+| tidesdb-java | master | (latest) |
+| TidesDB | master | (latest) |
+| Java | 11 or later | — |
+| zstd | dev | (latest) |
+| LZ4 | dev | (latest) |
+| Snappy | main | (latest) |
 
 ## Build
 
@@ -48,7 +67,7 @@ Install a JDK 11 or later separately and ensure `java`, `javac`, and `jar` resol
 The build performs the following steps:
 
 1. validates the host and toolchain;
-2. clones all upstream projects at pinned commits;
+2. clones all upstream projects at configured branch/tag;
 3. builds the pinned `tidesdb-java` Java artifact without modifying its source;
 4. builds static zstd, LZ4, Snappy, and TidesDB libraries;
 5. compiles the unchanged upstream JNI source and links it into `libtidesdb_jni.so`;
@@ -127,7 +146,7 @@ examples/basic/      standalone packaged-JAR acceptance test
 cmake/CMakeLists.txt native build definition
 ```
 
-The Java API comes from the pinned `tidesdb-java` release built under `build/work/`. `NativeLibrary.java` is maintained by this project to provide deterministic embedded-native extraction. The cloned upstream Java and JNI source is never patched, copied into the source tree, or formatted by this build. See [`VENDORED-CHANGES.md`](VENDORED-CHANGES.md) and [`BUILD-PLAN.md`](BUILD-PLAN.md).
+The Java API comes from the upstream `tidesdb-java` build under `build/work/`. `NativeLibrary.java` is maintained by this project to provide deterministic embedded-native extraction. The cloned upstream Java and JNI source is never patched, copied into the source tree, or formatted by this build. See [`VENDORED-CHANGES.md`](VENDORED-CHANGES.md) and [`BUILD-PLAN.md`](BUILD-PLAN.md).
 
 To apply Java formatting:
 
@@ -156,6 +175,8 @@ Normal Linux system dependencies such as glibc are permitted. The build enforces
 ## CI
 
 GitHub Actions runs `./build.sh` for pushes and pull requests targeting `main`, then retains `dist/` as a workflow artifact. CI uses SHA-pinned official actions and Corretto JDK 11.
+
+By default CI pulls the latest commit on each configured branch. To pin CI to specific versions, set the `.tag` values in `upstream.properties`.
 
 ## Licensing
 
