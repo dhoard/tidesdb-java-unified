@@ -6,12 +6,16 @@ PROJECT_DIR="$SCRIPT_DIR"
 STAGING_DIR="$PROJECT_DIR/build/staging"
 DIST_DIR="$PROJECT_DIR/dist"
 WORK_DIR="$PROJECT_DIR/build/work"
+GENERATED_RESOURCES_DIR="$PROJECT_DIR/build/generated-resources"
+MAVEN_REPO_DIR="$WORK_DIR/m2"
+NATIVE_RESOURCE_DIR="$GENERATED_RESOURCES_DIR/native/linux-x86_64"
+NATIVE_LIBRARY="$NATIVE_RESOURCE_DIR/libtidesdb_jni.so"
 
 # --- Trap: print failing command and line on error ---
 trap 'echo "[ERROR] Command failed (line $LINENO): $BASH_COMMAND" >&2' ERR
 
 # --- Trap: clean staging on exit if build fails ---
-trap 'rm -rf "$STAGING_DIR"' EXIT
+trap 'rm -rf "$STAGING_DIR"; rm -f "$PROJECT_DIR/dependency-reduced-pom.xml"' EXIT
 
 # --- Clean dist/ from any previous run ---
 rm -rf "$DIST_DIR" "$STAGING_DIR"
@@ -75,7 +79,6 @@ preflight() {
     check_cmd sha256sum ""    "sha256sum"
     check_cmd tar    ""       "tar"
     check_cmd curl   ""       "curl (Maven Wrapper bootstrap)"
-    check_cmd python3 ""       "Python 3 (JNI source patching)"
 
     # --- JDK ---
     check_cmd java "" "Java"
@@ -148,11 +151,10 @@ preflight() {
 # Clone upstream sources
 # ===================================================================
 clone_sources() {
-    rm -rf "$WORK_DIR"
-    mkdir -p "$WORK_DIR"
+    rm -rf "$WORK_DIR" "$GENERATED_RESOURCES_DIR"
+    mkdir -p "$WORK_DIR" "$GENERATED_RESOURCES_DIR"
 
     # Parse upstream.properties
-    local repo commit
     while IFS='=' read -r key value; do
         [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
         key=$(echo "$key" | xargs | tr '.-' '__')
@@ -160,64 +162,37 @@ clone_sources() {
         declare "$key=$value"
     done < "$PROJECT_DIR/upstream.properties"
 
-    echo "[CLONE] tidesdb $tidesdb_tag @ $tidesdb_commit"
-    rm -rf "$PROJECT_DIR/tidesdb"
-    git clone "$tidesdb_repo" "$PROJECT_DIR/tidesdb"
-    git -C "$PROJECT_DIR/tidesdb" checkout "$tidesdb_commit"
-    local actual
-    actual=$(git -C "$PROJECT_DIR/tidesdb" rev-parse HEAD)
-    if [ "$actual" != "$tidesdb_commit" ]; then
-        echo "[CLONE] FAIL: tidesdb checkout mismatch: expected $tidesdb_commit, got $actual"
-        exit 2
-    fi
+    # clone_and_checkout <name> <branch> <tag> <repo_url> <dest_dir>
+    clone_and_checkout() {
+        local name="$1" branch="$2" tag="$3" repo="$4" dest="$5"
+        echo "[CLONE] $name (branch: $branch${tag:+, tag: $tag})"
+        git clone --branch "$branch" "$repo" "$dest"
+        if [ -n "$tag" ]; then
+            git -C "$dest" checkout "$tag"
+        fi
+    }
 
-    echo "[CLONE] tidesdb-java $tidesdb_java_tag @ $tidesdb_java_commit"
-    git clone "$tidesdb_java_repo" "$WORK_DIR/tidesdb-java"
-    git -C "$WORK_DIR/tidesdb-java" checkout "$tidesdb_java_commit"
-    actual=$(git -C "$WORK_DIR/tidesdb-java" rev-parse HEAD)
-    if [ "$actual" != "$tidesdb_java_commit" ]; then
-        echo "[CLONE] FAIL: tidesdb-java checkout mismatch: expected $tidesdb_java_commit, got $actual"
-        exit 2
-    fi
-
-    # Patch JNI C source for tidesdb v9.3.13 compatibility
-    echo "[PATCH] Applying JNI C source patches..."
-    python3 "$PROJECT_DIR/scripts/patch-jni.py" "$WORK_DIR/tidesdb-java/src/main/c/com_tidesdb_TidesDB.c"
-
-    # Clone compression libraries at pinned SHAs
-    echo "[CLONE] zstd $zstd_version @ $zstd_commit"
-    git clone "$zstd_repo" "$WORK_DIR/zstd"
-    git -C "$WORK_DIR/zstd" checkout "$zstd_commit"
-
-    echo "[CLONE] lz4 $lz4_version @ $lz4_commit"
-    git clone "$lz4_repo" "$WORK_DIR/lz4"
-    git -C "$WORK_DIR/lz4" checkout "$lz4_commit"
-
-    echo "[CLONE] snappy $snappy_version @ $snappy_commit"
-    git clone "$snappy_repo" "$WORK_DIR/snappy"
-    git -C "$WORK_DIR/snappy" checkout "$snappy_commit"
+    clone_and_checkout tidesdb "$tidesdb_branch" "$tidesdb_tag" "$tidesdb_repo" "$WORK_DIR/tidesdb"
+    clone_and_checkout tidesdb-java "$tidesdb_java_branch" "$tidesdb_java_tag" "$tidesdb_java_repo" "$WORK_DIR/tidesdb-java"
+    clone_and_checkout zstd "$zstd_branch" "$zstd_tag" "$zstd_repo" "$WORK_DIR/zstd"
+    clone_and_checkout lz4 "$lz4_branch" "$lz4_tag" "$lz4_repo" "$WORK_DIR/lz4"
+    clone_and_checkout snappy "$snappy_branch" "$snappy_tag" "$snappy_repo" "$WORK_DIR/snappy"
 }
 
 # ===================================================================
-# Build tidesdb static library using its own build.sh
+# Build the pinned upstream Java artifact without modifying its source
 # ===================================================================
-build_tidesdb() {
-    echo "[TIDESDB] Building tidesdb static library (minimal mode)..."
-    local tidesdb_src="$PROJECT_DIR/tidesdb"
-    local tidesdb_build="$WORK_DIR/tidesdb-build"
+build_upstream_java() {
+    echo "[JAVA-UPSTREAM] Building pinned tidesdb-java source..."
+    "$WORK_DIR/tidesdb-java/mvnw" \
+        -f "$WORK_DIR/tidesdb-java/pom.xml" \
+        -Dmaven.repo.local="$MAVEN_REPO_DIR" \
+        -DskipTests \
+        -Dmaven.javadoc.skip=true \
+        clean install
 
-    (
-        cd "$tidesdb_src"
-        bash "$PROJECT_DIR/scripts/build-tidesdb.sh" \
-            minimal \
-            --no-compression \
-            --build-dir "$tidesdb_build" \
-            --skip-checks \
-            -DTIDESDB_WITH_SANITIZER=OFF \
-            -DENABLE_READ_PROFILING=OFF
-    )
-
-    echo "[TIDESDB] Static library built: $tidesdb_build/libtidesdb.a"
+    git -C "$WORK_DIR/tidesdb-java" diff --exit-code
+    echo "[JAVA-UPSTREAM] Source checkout remained unchanged."
 }
 
 # ===================================================================
@@ -230,7 +205,7 @@ build_native() {
     cmake -S "$PROJECT_DIR/cmake" -B "$native_build_dir" \
         -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
-        -DTIDESDB_SOURCE_DIR="$PROJECT_DIR/tidesdb" \
+        -DTIDESDB_SOURCE_DIR="$WORK_DIR/tidesdb" \
         -DTIDESDB_JAVA_SOURCE_DIR="$WORK_DIR/tidesdb-java" \
         -DZSTD_SOURCE_DIR="$WORK_DIR/zstd" \
         -DLZ4_SOURCE_DIR="$WORK_DIR/lz4" \
@@ -239,19 +214,22 @@ build_native() {
 
     cmake --build "$native_build_dir" --config Release
 
-    # Copy native output to resource directory
-    local native_resource_dir="$PROJECT_DIR/src/main/resources/native/linux-x86_64"
-    mkdir -p "$native_resource_dir"
-    cp "$native_build_dir/libtidesdb_jni.so" "$native_resource_dir/"
+    # Publish only generated output as a Maven resource. The source tree remains clean.
+    mkdir -p "$NATIVE_RESOURCE_DIR"
+    cp "$native_build_dir/libtidesdb_jni.so" "$NATIVE_LIBRARY"
 
-    echo "[NATIVE] Built: $native_resource_dir/libtidesdb_jni.so"
+    # Release builds must never modify either cloned upstream checkout.
+    git -C "$WORK_DIR/tidesdb" diff --exit-code
+    git -C "$WORK_DIR/tidesdb-java" diff --exit-code
+
+    echo "[NATIVE] Built: $NATIVE_LIBRARY"
 }
 
 # ===================================================================
 # Verify native library dependencies
 # ===================================================================
 verify_native() {
-    local lib="$PROJECT_DIR/src/main/resources/native/linux-x86_64/libtidesdb_jni.so"
+    local lib="$NATIVE_LIBRARY"
     if [ ! -f "$lib" ]; then
         echo "[VERIFY] FAIL: library not found: $lib"
         exit 3
@@ -292,58 +270,50 @@ verify_native() {
 }
 
 # ===================================================================
-# Vendor upstream tidesdb-java Java sources
-# ===================================================================
-vendor_java_sources() {
-    echo "[VENDOR] Copying upstream tidesdb-java Java sources..."
-    local upstream_src="$WORK_DIR/tidesdb-java/src/main/java/com/tidesdb"
-    local target_src="$PROJECT_DIR/src/main/java/com/tidesdb"
-
-    if [ ! -d "$upstream_src" ]; then
-        echo "[VENDOR] FAIL: upstream Java source directory not found: $upstream_src"
-        exit 2
-    fi
-
-    local maintained_loader="$target_src/NativeLibrary.java"
-    if [ ! -f "$maintained_loader" ]; then
-        echo "[VENDOR] FAIL: maintained native loader not found: $maintained_loader"
-        exit 2
-    fi
-
-    local -a upstream_files
-    mapfile -t upstream_files < <(find "$upstream_src" -maxdepth 1 -type f -name '*.java' -print | sort)
-    if [ "${#upstream_files[@]}" -eq 0 ]; then
-        echo "[VENDOR] FAIL: no upstream Java sources found in: $upstream_src"
-        exit 2
-    fi
-
-    # Refresh the checked-in upstream API sources deterministically, retaining
-    # this project's customized native loader.
-    mkdir -p "$target_src"
-    find "$target_src" -maxdepth 1 -type f -name '*.java' ! -name 'NativeLibrary.java' -delete
-    local f basename
-    for f in "${upstream_files[@]}"; do
-        basename=$(basename "$f")
-        if [ "$basename" != "NativeLibrary.java" ]; then
-            cp "$f" "$target_src/$basename"
-            echo "[VENDOR]   $basename"
-        fi
-    done
-
-    echo "[VENDOR] Done. Running spotless:apply on vendored sources..."
-    cd "$PROJECT_DIR"
-    ./mvnw spotless:apply -q 2>&1 || echo "[VENDOR] spotless:apply skipped (may require JDK < 25)"
-    echo "[VENDOR] Vendored sources processed."
-}
-
-# ===================================================================
 # Build Java project
 # ===================================================================
 build_java() {
-    echo "[JAVA] Running: ./mvnw clean install -Dspotless.check.skip=true"
+    echo "[JAVA] Running unified Maven build against the pinned upstream artifact..."
     cd "$PROJECT_DIR"
-    ./mvnw clean install -Dspotless.check.skip=true
+    ./mvnw -Dmaven.repo.local="$MAVEN_REPO_DIR" clean install -Dspotless.check.skip=true
+    rm -f "$PROJECT_DIR/dependency-reduced-pom.xml"
     echo "[JAVA] Build complete."
+}
+
+# ===================================================================
+# Assemble complete sources without copying upstream source into this tree
+# ===================================================================
+assemble_sources() {
+    local upstream_sources="$WORK_DIR/tidesdb-java/target/tidesdb-java-0.8.3-sources.jar"
+    local unified_sources="$PROJECT_DIR/target/tidesdb-java-unified-0.8.3_tidesdb-9.3.13-sources.jar"
+    local assembly_dir="$WORK_DIR/source-assembly"
+    local assembled_sources="$WORK_DIR/tidesdb-java-unified-sources.jar"
+
+    if [ ! -f "$upstream_sources" ] || [ ! -f "$unified_sources" ]; then
+        echo "[SOURCES] FAIL: source artifact missing"
+        exit 4
+    fi
+
+    rm -rf "$assembly_dir"
+    mkdir -p "$assembly_dir"
+    (
+        cd "$assembly_dir"
+        jar xf "$upstream_sources"
+        rm -f com/tidesdb/NativeLibrary.java
+        rm -rf META-INF/maven/com.tidesdb/tidesdb-java
+        jar xf "$unified_sources"
+        rm -rf native
+        jar --create --file "$assembled_sources" .
+    )
+    mv "$assembled_sources" "$unified_sources"
+
+    # Replace only the initially installed loader-only source artifact. Do not
+    # reinstall the project POM: Maven Shade installed a dependency-reduced POM
+    # so consumers retain the single-JAR contract.
+    cp "$unified_sources" \
+        "$MAVEN_REPO_DIR/com/tidesdb/tidesdb-java-unified/0.8.3_tidesdb-9.3.13/"
+
+    echo "[SOURCES] Combined unchanged upstream API sources with the unified loader source."
 }
 
 # ===================================================================
@@ -424,16 +394,16 @@ generate_dist() {
         echo "Native Dependency Report"
         echo "========================"
         echo "Build host: $(uname -a)"
-        echo "TidesDB: $(grep 'tidesdb.tag=' "$PROJECT_DIR/upstream.properties" | cut -d= -f2)"
-        echo "TidesDB commit: $(grep 'tidesdb.commit=' "$PROJECT_DIR/upstream.properties" | cut -d= -f2)"
-        echo "tidesdb-java: $(grep 'tidesdb-java.tag=' "$PROJECT_DIR/upstream.properties" | cut -d= -f2)"
-        echo "tidesdb-java commit: $(grep 'tidesdb-java.commit=' "$PROJECT_DIR/upstream.properties" | cut -d= -f2)"
+        echo "TidesDB branch: $(grep 'tidesdb.branch=' "$PROJECT_DIR/upstream.properties" | cut -d= -f2)"
+        echo "TidesDB tag: $(grep 'tidesdb.tag=' "$PROJECT_DIR/upstream.properties" | cut -d= -f2 || echo '(latest)')"
+        echo "tidesdb-java branch: $(grep 'tidesdb-java.branch=' "$PROJECT_DIR/upstream.properties" | cut -d= -f2)"
+        echo "tidesdb-java tag: $(grep 'tidesdb-java.tag=' "$PROJECT_DIR/upstream.properties" | cut -d= -f2 || echo '(latest)')"
         echo ""
         echo "--- ldd ---"
-        ldd "$PROJECT_DIR/src/main/resources/native/linux-x86_64/libtidesdb_jni.so" 2>&1
+        ldd "$NATIVE_LIBRARY" 2>&1
         echo ""
         echo "--- readelf -d ---"
-        readelf -d "$PROJECT_DIR/src/main/resources/native/linux-x86_64/libtidesdb_jni.so" 2>&1 | grep 'NEEDED' || echo "(none)"
+        readelf -d "$NATIVE_LIBRARY" 2>&1 | grep 'NEEDED' || echo "(none)"
     } > "$report"
 
     # Copy license files
@@ -455,10 +425,10 @@ preflight
 phase "Clone upstream sources"
 clone_sources
 
-phase "Vendor tidesdb-java Java sources"
-vendor_java_sources
+phase "Build pinned tidesdb-java artifact"
+build_upstream_java
 
-phase "Build native library"
+phase "Build native library from unchanged upstream JNI source"
 build_native
 
 phase "Verify native library dependencies"
@@ -466,6 +436,9 @@ verify_native
 
 phase "Build Java project"
 build_java
+
+phase "Assemble complete sources artifact"
+assemble_sources
 
 phase "Packaged-JAR validation"
 validate_jar

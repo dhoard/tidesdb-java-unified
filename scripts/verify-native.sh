@@ -5,7 +5,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 OS="${1:-linux}"
 ARCH="${2:-x86_64}"
-NATIVE_DIR="$PROJECT_DIR/src/main/resources/native/$OS-$ARCH"
+NATIVE_DIR="$PROJECT_DIR/build/generated-resources/native/$OS-$ARCH"
 
 case "$OS" in
     linux)   NATIVE_LIB="libtidesdb_jni.so" ;;

@@ -1,5 +1,7 @@
 # tidesdb-java-unified — Phased Implementation Specification
 
+> **Current source-integration decision:** [`BUILD-PLAN.md`](BUILD-PLAN.md) supersedes the vendored-source and JNI-patching instructions below. `./build.sh` now builds pinned upstream source unchanged.
+
 > Derived from PLAN.md (updated 2026-07-12). Each phase has explicit inputs,
 > outputs, file-level implementation details, and gating acceptance criteria.
 > No step may be considered complete until its acceptance criteria are

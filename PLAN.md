@@ -1,5 +1,7 @@
 # tidesdb-java-unified project plan
 
+> **Current source-integration decision:** [`BUILD-PLAN.md`](BUILD-PLAN.md) supersedes the earlier vendoring and patching alternatives in this document. Cloned upstream source is built unchanged.
+
 ## 1. Goal
 
 Build one platform-specific Java dependency containing the TidesDB Java API and the native JNI library for the build platform. Every supported OS/architecture builds and tests its own final JAR; native outputs from different platforms are never combined into a universal JAR. At runtime the Java code validates the current platform, extracts that JAR's native artifact, and loads it with `System.load(...)`.

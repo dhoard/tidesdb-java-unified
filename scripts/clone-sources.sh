@@ -13,26 +13,22 @@ while IFS='=' read -r key value; do
     declare "$key=$value"
 done < "$PROJECT_DIR/upstream.properties"
 
-# Clone and verify tidesdb
-if [ ! -d "$WORK_DIR/tidesdb" ]; then
-    git clone "$tidesdb_repo" "$WORK_DIR/tidesdb"
-fi
-git -C "$WORK_DIR/tidesdb" fetch --tags
-git -C "$WORK_DIR/tidesdb" checkout "$tidesdb_commit"
-actual=$(git -C "$WORK_DIR/tidesdb" rev-parse HEAD)
-if [ "$actual" != "$tidesdb_commit" ]; then
-    echo "ERROR: tidesdb checkout mismatch" >&2; exit 1
-fi
+# clone_and_checkout <name> <branch> <tag> <repo_url> <dest_dir>
+clone_and_checkout() {
+    local name="$1" branch="$2" tag="$3" repo="$4" dest="$5"
+    if [ ! -d "$dest" ]; then
+        git clone --branch "$branch" "$repo" "$dest"
+    else
+        git -C "$dest" fetch origin "$branch"
+        git -C "$dest" checkout "$branch"
+        git -C "$dest" pull --ff-only origin "$branch"
+    fi
+    if [ -n "$tag" ]; then
+        git -C "$dest" checkout "$tag"
+    fi
+}
 
-# Clone and verify tidesdb-java
-if [ ! -d "$WORK_DIR/tidesdb-java" ]; then
-    git clone "$tidesdb_java_repo" "$WORK_DIR/tidesdb-java"
-fi
-git -C "$WORK_DIR/tidesdb-java" fetch --tags
-git -C "$WORK_DIR/tidesdb-java" checkout "$tidesdb_java_commit"
-actual=$(git -C "$WORK_DIR/tidesdb-java" rev-parse HEAD)
-if [ "$actual" != "$tidesdb_java_commit" ]; then
-    echo "ERROR: tidesdb-java checkout mismatch" >&2; exit 1
-fi
+clone_and_checkout tidesdb "$tidesdb_branch" "$tidesdb_tag" "$tidesdb_repo" "$WORK_DIR/tidesdb"
+clone_and_checkout tidesdb-java "$tidesdb_java_branch" "$tidesdb_java_tag" "$tidesdb_java_repo" "$WORK_DIR/tidesdb-java"
 
-echo "Sources checked out at pinned commits."
+echo "Sources checked out."

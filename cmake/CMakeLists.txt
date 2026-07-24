@@ -45,13 +45,18 @@ add_subdirectory(${TIDESDB_SOURCE_DIR} tidesdb_build)
 # --- JNI shared library ---
 find_package(JNI REQUIRED)
 
+# RTLD_DEFAULT (used by upstream tidesdb-java JNI source) requires _GNU_SOURCE on Linux.
+add_compile_definitions(_GNU_SOURCE)
+
 add_library(tidesdb_jni SHARED
     ${TIDESDB_JAVA_SOURCE_DIR}/src/main/c/com_tidesdb_TidesDB.c
 )
 
+# Compile the JNI bridge as an external consumer of TidesDB. TidesDB creates
+# this install-shaped include tree during configuration, so the upstream
+# <tidesdb/db.h> include works without modifying the cloned JNI source.
 target_include_directories(tidesdb_jni BEFORE PRIVATE
-    ${TIDESDB_SOURCE_DIR}/src
-    ${TIDESDB_SOURCE_DIR}/external
+    ${CMAKE_CURRENT_BINARY_DIR}/tidesdb_build/include
     ${JNI_INCLUDE_DIRS}
 )
 
@@ -61,6 +66,7 @@ target_link_libraries(tidesdb_jni PRIVATE
     lz4_static
     snappy
     ${JNI_LIBRARIES}
+    ${CMAKE_DL_LIBS}
 )
 
 # --- Linux-specific ---
