@@ -20,11 +20,6 @@ vcpkg_installed/
 *.dylib
 *.dll
 
-# Allow committed native libs under the resource tree
-!src/main/resources/native/**/*.so
-!src/main/resources/native/**/*.dylib
-!src/main/resources/native/**/*.dll
-
 # ── IDE / editor ──
 .idea/
 *.iml

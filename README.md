@@ -34,13 +34,13 @@ Run it on Linux x86-64 with at least 2 GB of free disk space. It requires:
 - GCC and G++
 - GNU binutils (`ld`, `ar`, `ranlib`, and `readelf`)
 - Java Development Kit 11 or later (`java`, `javac`, and `jar`)
-- `curl`, `file`, `ldd`, `sha256sum`, `tar`, and Python 3
+- `curl`, `file`, `ldd`, `sha256sum`, and `tar`
 
 For Ubuntu 22.04, the non-JDK build dependencies can be installed with:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y cmake ninja-build gcc g++ binutils curl file tar python3
+sudo apt-get install -y cmake ninja-build gcc g++ binutils curl file tar
 ```
 
 Install a JDK 11 or later separately and ensure `java`, `javac`, and `jar` resolve from `PATH`.
@@ -49,14 +49,13 @@ The build performs the following steps:
 
 1. validates the host and toolchain;
 2. clones all upstream projects at pinned commits;
-3. refreshes the checked-in `tidesdb-java` API sources;
-4. applies the documented JNI compatibility patch;
-5. builds static zstd, LZ4, Snappy, and TidesDB libraries;
-6. links them into `libtidesdb_jni.so`;
-7. audits the native library for forbidden dynamic dependencies;
-8. builds and tests the Java project;
-9. runs the standalone example against the packaged JAR using an isolated Maven repository;
-10. writes the validated artifacts and checksums to `dist/`.
+3. builds the pinned `tidesdb-java` Java artifact without modifying its source;
+4. builds static zstd, LZ4, Snappy, and TidesDB libraries;
+5. compiles the unchanged upstream JNI source and links it into `libtidesdb_jni.so`;
+6. audits the native library for forbidden dynamic dependencies;
+7. assembles and tests the unified Java artifact;
+8. runs the standalone example against the packaged JAR using an isolated Maven repository;
+9. writes the validated artifacts and checksums to `dist/`.
 
 The script may download Maven through the checked-in Maven Wrapper and requires network access to GitHub and Maven Central.
 
@@ -122,13 +121,13 @@ tidesdb-java-unified validation succeeded
 Production sources, tests, and examples are checked in:
 
 ```text
-src/main/java/       Java API and customized native loader
+src/main/java/       unified embedded-native loader (upstream API is merged during the build)
 src/test/java/       loader and JNI integration tests
 examples/basic/      standalone packaged-JAR acceptance test
 cmake/CMakeLists.txt native build definition
 ```
 
-The Java API is based on the pinned `tidesdb-java` release. `NativeLibrary.java` is maintained by this project, while [`scripts/patch-jni.py`](scripts/patch-jni.py) applies compatibility changes to the cloned JNI C source during the build. These differences are documented in [`VENDORED-CHANGES.md`](VENDORED-CHANGES.md).
+The Java API comes from the pinned `tidesdb-java` release built under `build/work/`. `NativeLibrary.java` is maintained by this project to provide deterministic embedded-native extraction. The cloned upstream Java and JNI source is never patched, copied into the source tree, or formatted by this build. See [`VENDORED-CHANGES.md`](VENDORED-CHANGES.md) and [`BUILD-PLAN.md`](BUILD-PLAN.md).
 
 To apply Java formatting:
 
