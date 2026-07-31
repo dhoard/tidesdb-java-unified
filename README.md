@@ -1,6 +1,6 @@
 # tidesdb-java-unified
 
-A self-contained Java binding for [TidesDB](https://github.com/tidesdb/tidesdb). The generated JAR embeds the TidesDB JNI library together with its native compression dependencies, so applications do not need a separate TidesDB installation or a custom `java.library.path`.
+A self-contained Java binding for [TidesDB](https://github.com/tidesdb/tidesdb). The generated JAR embeds the TidesDB core engine (`libtidesdb.so`) together with its JNI bridge (`libtidesdb_jni.so`) and statically-linked compression dependencies, so applications do not need a separate TidesDB installation or a custom `java.library.path`.
 
 > **Current platform:** Linux x86-64 with glibc. Other operating systems and architectures are not yet supported.
 
@@ -66,36 +66,37 @@ The build performs the following steps:
 
 1. validates the host and toolchain;
 2. clones all upstream projects at configured branch/tag;
-3. builds the pinned `tidesdb-java` Java artifact without modifying its source;
-4. builds static zstd, LZ4, Snappy, and TidesDB libraries;
-5. compiles the unchanged upstream JNI source and links it into `libtidesdb_jni.so`;
-6. audits the native library for forbidden dynamic dependencies;
-7. assembles and tests the unified Java artifact;
-8. runs the standalone example against the packaged JAR using an isolated Maven repository;
-9. writes the validated artifacts and checksums to `dist/`.
+3. builds static zstd, LZ4, and Snappy compression libraries;
+4. builds TidesDB as a shared library (`libtidesdb.so`) with statically-linked compression;
+5. compiles the unchanged upstream JNI source and links it into `libtidesdb_jni.so` against the built TidesDB;
+6. audits the native libraries for forbidden dynamic dependencies;
+7. builds the pinned `tidesdb-java` Java artifact without modifying its source;
+8. copies native libraries into the generated resources and builds the unified Java artifact;
+9. runs the standalone example against the packaged JAR using an isolated Maven repository.
 
-The script may download Maven through the checked-in Maven Wrapper and requires network access to GitHub and Maven Central.
+The script uses a temporary directory under `/tmp` for all build work and requires network access to GitHub and Maven Central.
 
 ## Build outputs
 
-A successful build creates:
+A successful build creates the unified JAR and related artifacts under `target/`:
 
 ```text
-dist/
+target/
 ├── tidesdb-java-unified-0.1.0.jar
 ├── tidesdb-java-unified-0.1.0-sources.jar
 ├── tidesdb-java-unified-0.1.0-javadoc.jar
-├── checksums.sha256
-├── native-dependencies.txt
-└── license and third-party notice files
+└── original-tidesdb-java-unified-0.1.0.jar
 ```
 
-Verify the artifacts with:
+Native libraries are also copied to `libs/` for local inspection:
 
-```bash
-cd dist
-sha256sum --check checksums.sha256
+```text
+libs/
+├── libtidesdb.so
+└── libtidesdb_jni.so
 ```
+
+The JAR is installed into the local Maven repository by `./mvnw clean install`.
 
 ## Use from Maven
 
@@ -109,13 +110,15 @@ sha256sum --check checksums.sha256
 </dependency>
 ```
 
-The application does not need to set `LD_LIBRARY_PATH` or `java.library.path`. On first use, `NativeLibrary` extracts the embedded JNI library into a versioned, SHA-256-addressed directory beneath `java.io.tmpdir` and loads it with `System.load(...)`.
+The application does not need to set `LD_LIBRARY_PATH` or `java.library.path`. On first use, `NativeLibrary` extracts the embedded libraries into a versioned, SHA-256-addressed directory beneath `java.io.tmpdir` and loads them in dependency order (`libtidesdb.so` first, then `libtidesdb_jni.so`) with `System.load(...)`.
 
-For development only, an explicit native library can be selected with an absolute path:
+For development only, an explicit JNI library path can be selected with an absolute path:
 
 ```bash
 java -Dtidesdb.native.library.path=/absolute/path/libtidesdb_jni.so -jar ...
 ```
+
+When using the override, you must ensure `libtidesdb.so` is discoverable by the dynamic linker.
 
 ## Native access and JDK 16+
 
@@ -192,11 +195,7 @@ After building the main project, run:
 ./mvnw -q -f examples/basic/pom.xml verify
 ```
 
-A successful run prints:
-
-```text
-tidesdb-java-unified validation succeeded
-```
+A successful run exits with code 0 (no output by default).
 
 ## Development
 
@@ -208,7 +207,7 @@ examples/basic/                                   standalone packaged-JAR accept
 cmake/CMakeLists.txt                              native build definition
 ```
 
-The Java API comes from the upstream `tidesdb-java` build under `build/work/`. `NativeLibrary.java` is maintained by this project to provide deterministic embedded-native extraction. The cloned upstream Java and JNI source is never patched, copied into the source tree, or formatted by this build.
+The Java API comes from the upstream `tidesdb-java` artifact built from a pinned clone. `NativeLibrary.java` is maintained by this project to provide deterministic embedded-native extraction. The cloned upstream Java and JNI source is never patched, copied into the source tree, or formatted by this build.
 
 To apply Java formatting:
 
@@ -224,19 +223,20 @@ The canonical end-to-end verification remains:
 
 ## Native dependency policy
 
-The packaged JNI shared library must not dynamically depend on separately installed copies of:
+The packaged libraries must not dynamically depend on separately installed copies of:
 
-- TidesDB
 - zstd
 - LZ4
 - Snappy
 - curl, OpenSSL, or the optional S3 implementation
 
-Normal Linux system dependencies such as glibc are permitted. The build enforces this policy with `ldd` and `readelf`; results are recorded in `dist/native-dependencies.txt`.
+The JNI bridge (`libtidesdb_jni.so`) dynamically depends on the *bundled* `libtidesdb.so` (the TidesDB core engine), which is extracted to the same cache directory at runtime. Compression libraries are statically linked into `libtidesdb.so` and do not appear as dynamic dependencies.
+
+Normal Linux system dependencies such as glibc are permitted. The build enforces this policy with `ldd` and `readelf`.
 
 ## CI
 
-GitHub Actions runs `./build.sh` for pushes and pull requests targeting `main`, then retains `dist/` as a workflow artifact. CI uses SHA-pinned official actions and Corretto JDK 11.
+GitHub Actions (`.github/workflows/build.yaml` and `manual-build.yaml`) runs `./build.sh` for pushes and pull requests targeting `main`, then retains `dist/` as a workflow artifact. CI uses SHA-pinned official actions and Corretto JDK 11.
 
 By default CI pulls the latest commit on each configured branch. To pin CI to specific versions, set the `.tag` values in `upstream.properties`.
 
