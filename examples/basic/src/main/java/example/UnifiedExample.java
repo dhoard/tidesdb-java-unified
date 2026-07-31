@@ -59,7 +59,5 @@ public final class UnifiedExample {
                 }
             }
         }
-
-        System.out.println("tidesdb-java-unified validation succeeded");
     }
 }

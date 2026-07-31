@@ -31,7 +31,9 @@ import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
@@ -39,13 +41,14 @@ import java.util.concurrent.locks.ReentrantLock;
 /**
  * Loads the platform-appropriate native TidesDB JNI library.
  *
- * <p>The library is embedded as a classpath resource under {@code
- * /native/<os>-<arch>/<library-name>}. At load time the resource is extracted to a versioned,
- * hash-addressed cache directory under {@code java.io.tmpdir} and loaded via {@link
+ * <p>The libraries are embedded as classpath resources under {@code /native/<os>-<arch>/}. Two
+ * shared libraries are packaged: {@code libtidesdb.so} (the TidesDB core engine) and {@code
+ * libtidesdb_jni.so} (the Java Native Interface bridge). At load time both resources are extracted
+ * to a versioned, hash-addressed cache directory under {@code java.io.tmpdir} and loaded via {@link
  * System#load(String)}.
  *
- * <p>Loading is idempotent and thread-safe. A development override is available via system property
- * {@code tidesdb.native.library.path}.
+ * <p>Loading is idempotent and thread-safe. A development override for the JNI bridge is available
+ * via system property {@code tidesdb.native.library.path}.
  */
 public final class NativeLibrary {
 
@@ -53,13 +56,16 @@ public final class NativeLibrary {
   private static final String CACHE_DIR_PREFIX = "tidesdb-java-unified";
   private static final String NATIVE_RESOURCE_PREFIX = "/native/";
 
+  /** Libraries to load, in dependency order (TidesDB core before JNI bridge). */
+  private static final String[] NATIVE_LIBS = {"libtidesdb.so", "libtidesdb_jni.so"};
+
   private static volatile Boolean loaded;
   private static final ReentrantLock LOAD_LOCK = new ReentrantLock();
 
   private NativeLibrary() {}
 
   /**
-   * Loads the native library if it has not already been loaded.
+   * Loads the native libraries if they have not already been loaded.
    *
    * @throws UnsatisfiedLinkError if loading fails
    */
@@ -85,12 +91,13 @@ public final class NativeLibrary {
   }
 
   private static void doLoad() {
-    // 1. Check development override
+    // 1. Check development override (loads a single library, no embedded extraction)
     String override = System.getProperty(PROPERTY_OVERRIDE);
     if (override != null && !override.isBlank()) {
       Path path = Paths.get(override.trim());
       if (!Files.isRegularFile(path)) {
-        throw new UnsatisfiedLinkError("Native library override path does not exist: " + path);
+        throw new UnsatisfiedLinkError(
+            "Native library override path does not exist: " + path);
       }
       System.load(path.toAbsolutePath().toString());
       return;
@@ -101,65 +108,72 @@ public final class NativeLibrary {
     String arch = normalizeArch(System.getProperty("os.arch"));
     String classifier = os + "-" + arch;
 
-    // 3. Determine library filename
-    String libName = mapLibraryName(os);
-
-    // 4. Resolve resource path
-    String resourcePath = NATIVE_RESOURCE_PREFIX + classifier + "/" + libName;
-
-    // 5. Read resource bytes and compute SHA-256
-    byte[] libBytes;
-    String sha256Hex;
-    try (InputStream in = NativeLibrary.class.getResourceAsStream(resourcePath)) {
-      if (in == null) {
-        throw new UnsatisfiedLinkError(
-            "Embedded native library not found for platform '"
-                + classifier
-                + "'. Supported platforms: linux-x86_64. "
-                + "Resource path: "
-                + resourcePath);
+    // 3. Read all embedded libraries and compute their SHA-256 hashes
+    List<LibEntry> entries = new ArrayList<>(NATIVE_LIBS.length);
+    for (String libName : NATIVE_LIBS) {
+      String resourcePath = NATIVE_RESOURCE_PREFIX + classifier + "/" + libName;
+      byte[] libBytes;
+      try (InputStream in = NativeLibrary.class.getResourceAsStream(resourcePath)) {
+        if (in == null) {
+          throw new UnsatisfiedLinkError(
+              "Embedded native library not found for platform '"
+                  + classifier
+                  + "'. Resource: "
+                  + resourcePath);
+        }
+        libBytes = in.readAllBytes();
+      } catch (IOException e) {
+        UnsatisfiedLinkError err =
+            new UnsatisfiedLinkError("Failed to read embedded native library: " + resourcePath);
+        err.initCause(e);
+        throw err;
       }
-      libBytes = in.readAllBytes();
-      sha256Hex = sha256Hex(libBytes);
-    } catch (IOException e) {
-      UnsatisfiedLinkError err =
-          new UnsatisfiedLinkError("Failed to read embedded native library: " + resourcePath);
-      err.initCause(e);
-      throw err;
+      entries.add(new LibEntry(libName, libBytes, sha256Hex(libBytes)));
     }
 
-    // 6. Extract to cache directory
+    // 4. Use the SHA-256 of the JNI library as the cache subdirectory so both
+    //    .so files end up in the same directory (libtidesdb_jni.so depends on
+    //    libtidesdb.so and needs to find it via the dynamic linker).
+    String cacheKey = entries.get(entries.size() - 1).sha256;
     String version = version();
     Path cacheDir =
-        Paths.get(System.getProperty("java.io.tmpdir"), CACHE_DIR_PREFIX, version, sha256Hex);
-    Path libPath = cacheDir.resolve(libName);
+        Paths.get(System.getProperty("java.io.tmpdir"), CACHE_DIR_PREFIX, version, cacheKey);
 
+    // 5. Extract all libraries into the shared cache directory
     try {
-      extract(cacheDir, libName, libBytes, sha256Hex);
+      for (LibEntry entry : entries) {
+        extract(cacheDir, entry.name, entry.bytes, entry.sha256);
+      }
     } catch (IOException e) {
       UnsatisfiedLinkError err =
-          new UnsatisfiedLinkError("Failed to extract native library to: " + libPath);
+          new UnsatisfiedLinkError("Failed to extract native libraries to: " + cacheDir);
       err.initCause(e);
       throw err;
     }
 
-    // 7. Load
-    try {
-      System.load(libPath.toAbsolutePath().toString());
-    } catch (UnsatisfiedLinkError e) {
-      UnsatisfiedLinkError err =
-          new UnsatisfiedLinkError(
-              "Failed to load native library from: "
-                  + libPath
-                  + " (resource: "
-                  + resourcePath
-                  + ")");
-      err.initCause(e);
-      throw err;
+    // 6. Load in dependency order (TidesDB core first, then JNI bridge)
+    for (LibEntry entry : entries) {
+      Path libPath = cacheDir.resolve(entry.name);
+      try {
+        System.load(libPath.toAbsolutePath().toString());
+      } catch (UnsatisfiedLinkError e) {
+        UnsatisfiedLinkError err =
+            new UnsatisfiedLinkError(
+                "Failed to load native library: "
+                    + libPath
+                    + " (resource: "
+                    + NATIVE_RESOURCE_PREFIX
+                    + classifier
+                    + "/"
+                    + entry.name
+                    + ")");
+        err.initCause(e);
+        throw err;
+      }
     }
   }
 
-  // ---- Platform normalization ----
+  // ----  Platform normalization ----
 
   static String normalizeOs(String osName) {
     String lower = osName.toLowerCase(Locale.ROOT);
@@ -191,12 +205,7 @@ public final class NativeLibrary {
     }
   }
 
-  // ---- Utility ----
-
-  private static String version() {
-    String v = NativeLibrary.class.getPackage().getImplementationVersion();
-    return v != null ? v : "dev";
-  }
+  // ----  Extraction (process-safe, crash-safe) ----
 
   /** Publishes validated bytes into a cache shared by independent JVMs. */
   static Path extract(Path cacheDir, String libName, byte[] libBytes, String sha256Hex)
@@ -240,6 +249,13 @@ public final class NativeLibrary {
     return libPath;
   }
 
+  // ----  Utility ----
+
+  private static String version() {
+    String v = NativeLibrary.class.getPackage().getImplementationVersion();
+    return v != null ? v : "dev";
+  }
+
   private static String sha256Hex(byte[] data) {
     try {
       MessageDigest md = MessageDigest.getInstance("SHA-256");
@@ -268,6 +284,19 @@ public final class NativeLibrary {
       Files.setPosixFilePermissions(path, perms);
     } catch (UnsupportedOperationException ignored) {
       // Windows — permissions handled differently
+    }
+  }
+
+  /** Internal record holding a library's name, bytes, and SHA-256 hash. */
+  private static final class LibEntry {
+    final String name;
+    final byte[] bytes;
+    final String sha256;
+
+    LibEntry(String name, byte[] bytes, String sha256) {
+      this.name = name;
+      this.bytes = bytes;
+      this.sha256 = sha256;
     }
   }
 }

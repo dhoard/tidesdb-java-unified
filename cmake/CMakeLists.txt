@@ -1,11 +1,12 @@
 cmake_minimum_required(VERSION 3.25)
-project(tidesdb-jni C CXX)
+project(tidesdb-native C CXX)
 
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-set(BUILD_SHARED_LIBS OFF)
 
-# --- Compression libraries (built from cloned source, static, PIC) ---
-# These must be built BEFORE tidesdb so its CMake can find the targets.
+# ── Compression libraries (static, PIC) ──────────────────────────────────────
+# These must be built BEFORE TidesDB so its CMake can find the targets defined
+# by their config packages.  We install them to a local prefix so TidesDB's
+# CMake (via CMAKE_PREFIX_PATH / TIDESDB_*_TARGET) can resolve them.
 
 # zstd
 set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "")
@@ -19,66 +20,44 @@ add_subdirectory(${ZSTD_SOURCE_DIR}/build/cmake zstd_build)
 set(LZ4_BUILD_CLI OFF CACHE BOOL "")
 set(LZ4_BUILD_LEGACY_LZ4C OFF CACHE BOOL "")
 set(BUILD_STATIC_LIBS ON CACHE BOOL "")
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "")
 add_subdirectory(${LZ4_SOURCE_DIR}/build/cmake lz4_build)
 
 # snappy
 set(SNAPPY_BUILD_TESTS OFF CACHE BOOL "")
 set(SNAPPY_BUILD_BENCHMARKS OFF CACHE BOOL "")
 set(SNAPPY_INSTALL OFF CACHE BOOL "")
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "")
 add_subdirectory(${SNAPPY_SOURCE_DIR} snappy_build)
 
-# --- TidesDB (built as static library, with compression from above) ---
+
+# ── TidesDB (built as SHARED, links static compression libs) ─────────────────
 set(TIDESDB_WITH_ZSTD ON CACHE BOOL "")
 set(TIDESDB_WITH_LZ4 ON CACHE BOOL "")
 set(TIDESDB_WITH_SNAPPY ON CACHE BOOL "")
 set(TIDESDB_BUILD_TESTS OFF CACHE BOOL "")
 set(TIDESDB_WITH_SANITIZER OFF CACHE BOOL "")
 set(ENABLE_READ_PROFILING OFF CACHE BOOL "")
+set(TIDESDB_WITH_S3 OFF CACHE BOOL "")
 
-# Provide find targets so TidesDB's CMake resolves our static builds
-add_library(zstd::libzstd_shared ALIAS libzstd_static)
-add_library(lz4::lz4_shared ALIAS lz4_static)
-add_library(Snappy::snappy_shared ALIAS snappy)
+# Point TidesDB at the static compression targets built above.
+# The _tidesdb_link_compression function checks TIDESDB_<X>_TARGET first,
+# then known CMake target names, then falls back to -l<name>.
+# We use the known target names created by the add_subdirectory calls.
+set(TIDESDB_ZSTD_TARGET libzstd_static CACHE STRING "")
+set(TIDESDB_LZ4_TARGET lz4_static CACHE STRING "")
+set(TIDESDB_SNAPPY_TARGET snappy CACHE STRING "")
+
+# Build TidesDB as a shared library so libtidesdb.so is produced.
+set(BUILD_SHARED_LIBS ON CACHE BOOL "")
 
 add_subdirectory(${TIDESDB_SOURCE_DIR} tidesdb_build)
 
-# --- JNI shared library ---
-find_package(JNI REQUIRED)
+# Ensure the build-tree include directory exists for downstream consumers.
+# TidesDB's CMake already creates ${CMAKE_CURRENT_BINARY_DIR}/tidesdb_build/include
+# as a POST_BUILD step; we just need it present before anything tries to use it.
 
-# RTLD_DEFAULT (used by upstream tidesdb-java JNI source) requires _GNU_SOURCE on Linux.
-add_compile_definitions(_GNU_SOURCE)
-
-add_library(tidesdb_jni SHARED
-    ${TIDESDB_JAVA_SOURCE_DIR}/src/main/c/com_tidesdb_TidesDB.c
-)
-
-# Compile the JNI bridge as an external consumer of TidesDB. TidesDB creates
-# this install-shaped include tree during configuration, so the upstream
-# <tidesdb/db.h> include works without modifying the cloned JNI source.
-target_include_directories(tidesdb_jni BEFORE PRIVATE
-    ${CMAKE_CURRENT_BINARY_DIR}/tidesdb_build/include
-    ${JNI_INCLUDE_DIRS}
-)
-
-target_link_libraries(tidesdb_jni PRIVATE
-    tidesdb
-    libzstd_static
-    lz4_static
-    snappy
-    ${JNI_LIBRARIES}
-    ${CMAKE_DL_LIBS}
-)
-
-# --- Linux-specific ---
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_link_libraries(tidesdb_jni PRIVATE
-        -static-libgcc -static-libstdc++
-    )
-endif()
-
-# --- Strip release builds ---
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    add_custom_command(TARGET tidesdb_jni POST_BUILD
-        COMMAND ${CMAKE_STRIP} --strip-unneeded $<TARGET_FILE:tidesdb_jni>
-    )
-endif()
+# ── Install target ───────────────────────────────────────────────────────────
+# The compression libs are already installed by the individual builds above
+# (if CMAKE_INSTALL_PREFIX is set).  TidesDB installs via its own install()
+# rules.  This project's build.sh orchestrates the install steps.

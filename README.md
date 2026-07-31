@@ -9,32 +9,30 @@ A self-contained Java binding for [TidesDB](https://github.com/tidesdb/tidesdb).
 All upstream sources are configured in [`upstream.properties`](upstream.properties) using a branch + tag model:
 
 ```properties
-tidesdb.branch=master
-tidesdb.tag=           # empty = latest on branch
 tidesdb.repo=https://github.com/tidesdb/tidesdb.git
+tidesdb.branch=master
+tidesdb.tag=v9.3.13
+
+tidesdb-java.repo=https://github.com/tidesdb/tidesdb-java.git
+tidesdb-java.branch=master
+tidesdb-java.tag=v0.8.3
 ```
 
 | Field | Purpose |
 |---|---|
+| `.repo` | Repository URL |
 | `.branch` | Branch to clone |
 | `.tag` | Tag to checkout (empty = latest on branch) |
-| `.repo` | Repository URL |
 
-To pin a specific release, set the tag:
+To pin a specific release, set the `.tag` value for the relevant component.
 
-```properties
-tidesdb.branch=master
-tidesdb.tag=v9.3.13
-```
-
-| Component | Branch | Default Tag |
+| Component | Branch | Pinned Tag |
 |---|---|---|
-| tidesdb-java | master | (latest) |
-| TidesDB | master | (latest) |
-| Java | 11 or later | — |
-| zstd | dev | (latest) |
-| LZ4 | dev | (latest) |
-| Snappy | main | (latest) |
+| TidesDB | master | v9.3.13 |
+| tidesdb-java | master | v0.8.3 |
+| zstd | dev | v1.5.7 |
+| LZ4 | dev | v1.10.0 |
+| Snappy | main | 1.2.2 |
 
 ## Build
 
@@ -84,9 +82,9 @@ A successful build creates:
 
 ```text
 dist/
-├── tidesdb-java-unified-0.8.3_tidesdb-9.3.13.jar
-├── tidesdb-java-unified-0.8.3_tidesdb-9.3.13-sources.jar
-├── tidesdb-java-unified-0.8.3_tidesdb-9.3.13-javadoc.jar
+├── tidesdb-java-unified-0.1.0.jar
+├── tidesdb-java-unified-0.1.0-sources.jar
+├── tidesdb-java-unified-0.1.0-javadoc.jar
 ├── checksums.sha256
 ├── native-dependencies.txt
 └── license and third-party notice files
@@ -107,7 +105,7 @@ sha256sum --check checksums.sha256
 <dependency>
   <groupId>com.tidesdb</groupId>
   <artifactId>tidesdb-java-unified</artifactId>
-  <version>0.8.3_tidesdb-9.3.13</version>
+  <version>0.1.0</version>
 </dependency>
 ```
 
@@ -116,8 +114,73 @@ The application does not need to set `LD_LIBRARY_PATH` or `java.library.path`. O
 For development only, an explicit native library can be selected with an absolute path:
 
 ```bash
-java -Dtidesdb.native.library.path=/absolute/path/libtidesdb_jni.so ...
+java -Dtidesdb.native.library.path=/absolute/path/libtidesdb_jni.so -jar ...
 ```
+
+## Native access and JDK 16+
+
+`NativeLibrary` uses `System.load()` to load the embedded JNI shared library. Starting with JDK 16, `java.lang.System::load` is a **restricted method** — the JVM emits a warning when it is called:
+
+```
+WARNING: A restricted method in java.lang.System has been called
+WARNING: java.lang.System::load has been called by com.tidesdb.NativeLibrary
+         in an unnamed module (file:...)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning
+         for callers in this module
+WARNING: Restricted methods will be blocked in a future release
+         unless native access is enabled
+```
+
+To suppress the warning and ensure forward compatibility, pass the JVM flag. Use `ALL-UNNAMED` when the JAR is on the **class path** (the usual case):
+
+```bash
+java --enable-native-access=ALL-UNNAMED -jar myapp.jar
+```
+
+Use `com.tidesdb` when the JAR is on the **module path**:
+
+```bash
+java --enable-native-access=com.tidesdb --module-path=... -jar myapp.jar
+```
+
+Or with Maven Surefire (for tests):
+
+```xml
+<plugin>
+  <groupId>org.apache.maven.plugins</groupId>
+  <artifactId>maven-surefire-plugin</artifactId>
+  <configuration>
+    <argLine>--enable-native-access=ALL-UNNAMED</argLine>
+  </configuration>
+</plugin>
+```
+
+Or with the Maven Exec plugin:
+
+```xml
+<plugin>
+  <groupId>org.codehaus.mojo</groupId>
+  <artifactId>exec-maven-plugin</artifactId>
+  <configuration>
+    <jvmArgs>
+      <jvmArg>--enable-native-access=ALL-UNNAMED</jvmArg>
+    </jvmArgs>
+  </configuration>
+</plugin>
+```
+
+### When to use `ALL-UNNAMED` vs `com.tidesdb`
+
+The `tidesdb-java-unified` JAR ships with a `module-info.class` (module name `com.tidesdb`). Which flag you need depends on how the JAR is loaded:
+
+| JAR location | Flag | Reason |
+|---|---|---|
+| **Class path** (typical Maven dependency, `java -cp`, `java -jar`) | `ALL-UNNAMED` | JAR on the class path is part of the unnamed module |
+| **Module path** (`--module-path`, `--add-modules`) | `com.tidesdb` | JAR on the module path is a named module |
+
+For most users, the JAR sits on the class path, so `ALL-UNNAMED` is the right choice. If you place the JAR on the module path, the more specific `com.tidesdb` flag applies.
+
+> **Future direction:** If the JDK blocks unrestricted `System.load()` entirely, the planned migration is to the [Foreign Function & Memory API](https://openjdk.org/jeps/454) (JEP 454), which replaces JNI and provides its own access-control mechanism.
 
 ## Example
 
@@ -137,16 +200,15 @@ tidesdb-java-unified validation succeeded
 
 ## Development
 
-Production sources, tests, and examples are checked in:
+Production sources and tests are checked in:
 
 ```text
-src/main/java/       unified embedded-native loader (upstream API is merged during the build)
-src/test/java/       loader and JNI integration tests
-examples/basic/      standalone packaged-JAR acceptance test
-cmake/CMakeLists.txt native build definition
+src/main/java/com/tidesdb/NativeLibrary.java     unified embedded-native loader
+examples/basic/                                   standalone packaged-JAR acceptance test
+cmake/CMakeLists.txt                              native build definition
 ```
 
-The Java API comes from the upstream `tidesdb-java` build under `build/work/`. `NativeLibrary.java` is maintained by this project to provide deterministic embedded-native extraction. The cloned upstream Java and JNI source is never patched, copied into the source tree, or formatted by this build. See [`VENDORED-CHANGES.md`](VENDORED-CHANGES.md) and [`BUILD-PLAN.md`](BUILD-PLAN.md).
+The Java API comes from the upstream `tidesdb-java` build under `build/work/`. `NativeLibrary.java` is maintained by this project to provide deterministic embedded-native extraction. The cloned upstream Java and JNI source is never patched, copied into the source tree, or formatted by this build.
 
 To apply Java formatting:
 
