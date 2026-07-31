@@ -242,6 +242,7 @@ build_jni() {
     cmake -S "$TIDESDB_JAVA_SRC/src/main/c" -B "$JNI_BUILD" \
         -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_FLAGS="-D_GNU_SOURCE" \
         -DTIDESDB_LIBRARY:FILEPATH="$tidesdb_lib" \
         -DTIDESDB_INCLUDE_DIR:PATH="$tidesdb_inc" \
         -DCMAKE_SKIP_RPATH=ON \
